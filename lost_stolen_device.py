@@ -9,9 +9,34 @@ import random
 
 import guava
 from guava import Agent
+from guava.helpers.rag import DocumentQA
 logger = logging.getLogger("metro.lost_stolen_device")
 
-# Temporary mock customer database
+
+
+SUPPORT_KB = """
+Device Replacement Options
+Customers with an active protection plan can order a replacement device online,
+by phone, or in a Metro by T-Mobile store. Customers without a protection plan
+can purchase a new device at full retail price, or a discounted upgrade price
+if they are eligible for an upgrade.
+
+Store Support
+Customers can find their nearest Metro by T-Mobile store using the store
+locator at metrobyt-mobile.com/stores. Bring a valid government-issued photo
+ID for any in-store account changes.
+
+Account Recovery
+If a customer cannot be verified over the phone (for example, they don't
+remember their PIN), they must visit a store in person with a valid
+government-issued photo ID to regain access to their account.
+
+SIM and eSIM
+A suspended line can be reactivated on a replacement device once the customer
+either inserts their existing SIM card or has an eSIM re-provisioned in
+store or through account self-service.
+"""
+
 CUSTOMERS = {
     "+15551234567": {
         "name": "Jordan Alvarez",
@@ -27,7 +52,7 @@ CUSTOMERS = {
     },
 }
 
-_OTP_STORE: dict[str, str] = {} # <-- Added temporary storage for codes
+_OTP_STORE: dict[str, str] = {}
 
 def lookup_customer(phone_number: str, pin: str) -> dict[str, Any] | None:
     """MOCK: verify phone + PIN against the customer data source."""
@@ -49,6 +74,20 @@ def verify_otp(target_phone: str, submitted_code: str) -> bool:
 def suspend_line(phone_number: str) -> bool:
     """MOCK: call the account-management API to suspend the line."""
     return True
+
+def suspend_line(phone_number: str) -> bool:
+    """MOCK: call the account-management API to suspend the line."""
+    return True
+
+def check_replacement_eligibility(phone_number: str) -> dict[str, Any]:
+    """MOCK: look up device replacement eligibility from an external service."""
+    record = CUSTOMERS.get(_normalize_phone(phone_number))
+    has_protection_plan = record is not None and record["account_type"] == "multi_line"
+    return {
+        "eligible_for_discounted_replacement": has_protection_plan,
+        "eligible_for_upgrade": True,
+        "nearest_store_hint": "use the store locator at metrobyt-mobile.com/stores",
+    }
 
 def _normalize_phone(raw: str) -> str:
     digits = "".join(ch for ch in raw if ch.isdigit())
@@ -92,9 +131,14 @@ agent = Agent(
         "through replacement options."
     ),
 )
+document_qa = DocumentQA(documents=SUPPORT_KB) 
+@agent.on_question
+def on_question(call: guava.Call, question: str) -> str:
+    """Retrieve answers dynamically from our local KB when asked an out-of-flow question."""
+    return document_qa.ask(question)
 @agent.on_call_start
 def on_call_start(call: guava.Call) -> None:
-    state_for(call)  # initialize state tracking block
+    state_for(call)
     call.set_task(
         "authenticate",
         objective=(
@@ -147,7 +191,6 @@ def on_authenticate_done(call: guava.Call) -> None:
     st.phone_number = _normalize_phone(phone_number)
     st.customer = record
 
-    # Check if the plan is multi-line and has a secondary verification route
     if record["account_type"] == "multi_line" and record.get("otp_target_phone"):
         send_otp(record["otp_target_phone"])
         call.set_task(
@@ -200,7 +243,7 @@ def on_otp_done(call: guava.Call) -> None:
         checklist=[guava.Field(key="otp_code", description="The one-time verification code sent via SMS")],
     )
 
-    
+
 def _begin_device_resolution(call: guava.Call, customer_name: str) -> None:
     st = state_for(call)
     st.authenticated = True
