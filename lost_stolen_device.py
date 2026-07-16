@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import os
+import guava
+from guava import Agent
 
 # Temporary mock customer database
 CUSTOMERS = {
@@ -17,17 +19,19 @@ CUSTOMERS = {
     },
 }
 
-def lookup_customer(phone_number: str, pin: str):
-    """
-    Temporary customer verification.
-    Later this will query Google Sheets.
-    """
-    customer = CUSTOMERS.get(phone_number)
-    if customer and customer["pin"] == pin:
-        return customer
-    return None
+agent = Agent(
+    name="Bianca",
+    organization="Metro by T-Mobile",
+    purpose=(
+        "Help customers report lost or stolen devices, "
+        "secure their accounts and find replacement options."
+    ),
+)
 
 if __name__ == "__main__":
+    from guava import logging_utils
+    logging_utils.configure_logging()
+
     parser = argparse.ArgumentParser()
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--phone", action="store_true")
@@ -37,10 +41,10 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.phone:
-        print("Listening on phone...")
+        agent.listen_phone(os.environ["GUAVA_AGENT_NUMBER"])
     elif args.webrtc:
-        print("Listening on WebRTC...")
+        agent.listen_webrtc()
     elif args.chat:
-        print("Starting chat...")
+        agent.chat()
     else:
-        print("Starting local call...")
+        agent.call_local()
