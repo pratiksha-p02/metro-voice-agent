@@ -60,6 +60,7 @@ def _normalize_phone(raw: str) -> str:
 # Per-call state management
 # ---------------------------------------------------------------------------
 MAX_AUTH_RETRIES = 2
+MAX_OTP_RETRIES = 2
 
 @dataclass
 class CallState:
@@ -67,7 +68,9 @@ class CallState:
     customer: dict[str, Any] | None = None
     phone_number: str | None = None
     auth_attempts: int = 0
-    otp_attempts: int = 0 # <-- Added tracker
+    otp_attempts: int = 0 
+    escalated: bool = False            
+    escalation_reason: str | None = None
     actions_taken: list[str] = field(default_factory=list)
 
 _CALL_STATE: dict[str, CallState] = {}
@@ -173,6 +176,19 @@ def on_otp_done(call: guava.Call) -> None:
         _begin_device_resolution(call, record["name"])
         return
 
+    # Check if we hit the limit
+    if st.otp_attempts >= MAX_OTP_RETRIES:
+        st.escalated = True
+        st.escalation_reason = "OTP verification failed"
+        call.hangup(
+            "Apologize that the verification code could not be confirmed after "
+            "multiple attempts. For security reasons, explain that you can't "
+            "make account changes right now, and direct the caller to visit a "
+            "Metro by T-Mobile store with a valid government-issued photo ID "
+            "or speak with a support representative."
+        )
+        return
+
     # Fallback retry warning
     call.send_instruction(
         "That code didn't match. Apologize and ask the caller to read the "
@@ -184,6 +200,7 @@ def on_otp_done(call: guava.Call) -> None:
         checklist=[guava.Field(key="otp_code", description="The one-time verification code sent via SMS")],
     )
 
+    
 def _begin_device_resolution(call: guava.Call, customer_name: str) -> None:
     st = state_for(call)
     st.authenticated = True
