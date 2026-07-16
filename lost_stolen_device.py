@@ -4,6 +4,8 @@ import argparse
 import os
 from dataclasses import dataclass, field
 from typing import Any
+import logging
+import random
 
 import guava
 from guava import Agent
@@ -15,13 +17,17 @@ CUSTOMERS = {
         "name": "Jordan Alvarez",
         "pin": "4821",
         "account_type": "multi_line",
+        "otp_target_phone": "+13233311758", 
     },
     "+15552223333": {
         "name": "Priya Natarajan",
         "pin": "0099",
         "account_type": "single_line",
+        "otp_target_phone": None,           
     },
 }
+
+_OTP_STORE: dict[str, str] = {} # <-- Added temporary storage for codes
 
 def lookup_customer(phone_number: str, pin: str) -> dict[str, Any] | None:
     """MOCK: verify phone + PIN against the customer data source."""
@@ -29,6 +35,16 @@ def lookup_customer(phone_number: str, pin: str) -> dict[str, Any] | None:
     if record and record["pin"] == pin:
         return record
     return None
+
+def send_otp(target_phone: str) -> None:
+    """MOCK: send a one-time code via SMS to the secondary verified number."""
+    code = f"{random.randint(0, 999999):06d}"
+    _OTP_STORE[target_phone] = code
+    logger.info("[MOCK SMS] OTP %s sent to %s", code, target_phone)
+
+def verify_otp(target_phone: str, submitted_code: str) -> bool:
+    expected = _OTP_STORE.get(target_phone)
+    return expected is not None and submitted_code.strip() == expected
 
 def suspend_line(phone_number: str) -> bool:
     """MOCK: call the account-management API to suspend the line."""
@@ -43,6 +59,7 @@ def _normalize_phone(raw: str) -> str:
 # ---------------------------------------------------------------------------
 # Per-call state management
 # ---------------------------------------------------------------------------
+MAX_AUTH_RETRIES = 2
 
 @dataclass
 class CallState:
@@ -50,12 +67,15 @@ class CallState:
     customer: dict[str, Any] | None = None
     phone_number: str | None = None
     auth_attempts: int = 0
+    otp_attempts: int = 0 # <-- Added tracker
     actions_taken: list[str] = field(default_factory=list)
 
 _CALL_STATE: dict[str, CallState] = {}
 
 def state_for(call: guava.Call) -> CallState:
     return _CALL_STATE.setdefault(call.id, CallState())
+
+
 
 
 
@@ -96,6 +116,16 @@ def on_authenticate_done(call: guava.Call) -> None:
     st.auth_attempts += 1
 
     if record is None:
+        if st.auth_attempts >= MAX_AUTH_RETRIES:
+            call.hangup(
+                "Apologize that you're unable to verify the account after "
+                "multiple attempts for security reasons. Direct the caller to "
+                "visit a Metro by T-Mobile store with a valid government-issued "
+                "photo ID, or offer to connect them with a customer support "
+                "representative. Do not disclose or guess at any account details."
+            )
+            return
+
         call.send_instruction(
             "The phone number and PIN did not match our records. Apologize, "
             "let the caller know you'll try again, and ask them to re-confirm "
@@ -113,10 +143,52 @@ def on_authenticate_done(call: guava.Call) -> None:
 
     st.phone_number = _normalize_phone(phone_number)
     st.customer = record
-    st.authenticated = True
 
+    # Check if the plan is multi-line and has a secondary verification route
+    if record["account_type"] == "multi_line" and record.get("otp_target_phone"):
+        send_otp(record["otp_target_phone"])
+        call.set_task(
+            "otp_verification",
+            objective=(
+                "This account is on a multi-line plan, so a one-time "
+                "verification code was just texted to another number on the "
+                "account. Ask the caller to read that code back to you."
+            ),
+            checklist=[guava.Field(key="otp_code", description="The one-time verification code sent via SMS")],
+        )
+    else:
+        _begin_device_resolution(call, record["name"])
+
+@agent.on_task_complete("otp_verification")
+def on_otp_done(call: guava.Call) -> None:
+    st = state_for(call)
+    record = st.customer
+    assert record is not None
+
+    submitted_code = str(call.get_field("otp_code"))
+    st.otp_attempts += 1
+
+    if verify_otp(record["otp_target_phone"], submitted_code):
+        st.authenticated = True
+        _begin_device_resolution(call, record["name"])
+        return
+
+    # Fallback retry warning
     call.send_instruction(
-        f"The caller is verified as {record['name']}. Greet them by name and "
+        "That code didn't match. Apologize and ask the caller to read the "
+        "verification code back one more time."
+    )
+    call.set_task(
+        "otp_verification",
+        objective="Re-collect the one-time verification code.",
+        checklist=[guava.Field(key="otp_code", description="The one-time verification code sent via SMS")],
+    )
+
+def _begin_device_resolution(call: guava.Call, customer_name: str) -> None:
+    st = state_for(call)
+    st.authenticated = True
+    call.send_instruction(
+        f"The caller is verified as {customer_name}. Greet them by name and "
         f"let them know you can help secure their account now."
     )
     call.set_task(
@@ -140,7 +212,7 @@ def on_authenticate_done(call: guava.Call) -> None:
                 choices=["yes", "no"],
             ),
         ],
-    )
+    )        
 
 @agent.on_task_complete("lost_or_stolen")
 def on_lost_or_stolen_done(call: guava.Call) -> None:
@@ -162,7 +234,7 @@ def on_lost_or_stolen_done(call: guava.Call) -> None:
     call.send_instruction("The line has been temporarily suspended. Confirm this with the caller in plain language.")
     call.hangup("Thank the caller, wish them well, and end the call.")
 
-    
+
 if __name__ == "__main__":
     from guava import logging_utils
     logging_utils.configure_logging()
