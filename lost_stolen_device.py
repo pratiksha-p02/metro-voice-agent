@@ -291,9 +291,56 @@ def on_lost_or_stolen_done(call: guava.Call) -> None:
     suspend_line(st.phone_number)
     st.actions_taken.append(f"suspended line for device_status={device_status}")
 
-    call.send_instruction("The line has been temporarily suspended. Confirm this with the caller in plain language.")
-    call.hangup("Thank the caller, wish them well, and end the call.")
+    # Check database to see if this specific customer is eligible for promotions
+    eligibility = check_replacement_eligibility(st.phone_number)
+    has_discount = eligibility["eligible_for_discounted_replacement"]
 
+    call.send_instruction(
+        f"The line has been temporarily suspended. Inform the customer of this.\n\n"
+        f"Next, share their device replacement eligibility:\n"
+        f"- Eligible for low-cost insurance replacement: {'YES (device protection active)' if has_discount else 'NO'}\n"
+        f"- Eligible for promotional upgrade: {'YES' if eligibility['eligible_for_upgrade'] else 'NO'}\n\n"
+        f"Now, let's find out how they want to handle getting their replacement."
+    )
+
+    call.set_task(
+        "device_replacement",
+        objective=(
+            "Discuss replacement device fulfillment options. Find out if they "
+            "prefer to pick up a replacement in a local Metro retail store, "
+            "or if they want one shipped directly to their home address."
+        ),
+        checklist=[
+            guava.Field(
+                key="replacement_preference",
+                description="How does the customer want to receive their new device?",
+                field_type="multiple_choice",
+                choices=["store", "shipping"],
+            ),
+        ],
+    )
+
+@agent.on_task_complete("device_replacement")
+def on_device_replacement_done(call: guava.Call) -> None:
+    st = state_for(call)
+    preference = call.get_field("replacement_preference")
+    st.actions_taken.append(f"selected replacement preference: {preference}")
+
+    if preference == "store":
+        call.send_instruction(
+            "Inform the customer they can head over to any Metro by T-Mobile store. "
+            "Remind them that they MUST bring a valid government-issued photo ID "
+            "in order to complete a physical swap or activate a new SIM card."
+        )
+    else:
+        call.send_instruction(
+            "Advise the customer that an order confirmation email and tracking link "
+            "will be dispatched shortly. Remind them that standard shipping takes "
+            "between 3 to 5 business days."
+        )
+
+    call.hangup("Warmly thank the customer for using Metro support, ask if there is "
+                "anything else they need, and end the call beautifully.")
 
 if __name__ == "__main__":
     from guava import logging_utils
