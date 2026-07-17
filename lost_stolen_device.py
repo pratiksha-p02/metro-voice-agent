@@ -3,16 +3,45 @@ from __future__ import annotations
 import argparse
 import os
 from dataclasses import dataclass, field
+import time
 from typing import Any
 import logging
 import random
+from datetime import datetime, timezone
 
 import guava
 from guava import Agent
 from guava.helpers.rag import DocumentQA
+
+import gspread
+
+gc = gspread.service_account(
+    "/Users/pratikshapadmanabhan/Downloads/metro-lost-device-agent-502521-b5bf963123d1.json"
+)
+sheet = gc.open("guavaCustomerSupport").sheet1
+
 logger = logging.getLogger("metro.lost_stolen_device")
 
 
+
+CUSTOMERS: dict[str, dict[str, Any]] = {
+    "+15551234567": {
+        "name": "Jordan Alvarez",
+        "pin": "4821",
+        "account_status": "active",
+        "account_type": "multi_line",
+        "otp_target_phone": "+15559876543",
+        "device": {"model": "Galaxy A15", "imei": "358212345678901"},
+    },
+    "+15552223333": {
+        "name": "Priya Natarajan",
+        "pin": "0099",
+        "account_status": "active",
+        "account_type": "single_line",
+        "otp_target_phone": None,
+        "device": {"model": "iPhone 13", "imei": "358299887766554"},
+    },
+}
 
 SUPPORT_KB = """
 Device Replacement Options
@@ -31,35 +60,39 @@ If a customer cannot be verified over the phone (for example, they don't
 remember their PIN), they must visit a store in person with a valid
 government-issued photo ID to regain access to their account.
 
+Reporting a Stolen Device
+Customers who believe their device was stolen, rather than misplaced, should
+file a report with their local law enforcement agency. They should keep note
+of their device's IMEI number, which the assistant can help confirm, in case
+it's requested during the investigation.
+
 SIM and eSIM
 A suspended line can be reactivated on a replacement device once the customer
 either inserts their existing SIM card or has an eSIM re-provisioned in
 store or through account self-service.
 """
-
-CUSTOMERS = {
-    "+15551234567": {
-        "name": "Jordan Alvarez",
-        "pin": "4821",
-        "account_type": "multi_line",
-        "otp_target_phone": "+13233311758", 
-    },
-    "+15552223333": {
-        "name": "Priya Natarajan",
-        "pin": "0099",
-        "account_type": "single_line",
-        "otp_target_phone": None,           
-    },
-}
-
 _OTP_STORE: dict[str, str] = {}
 
 def lookup_customer(phone_number: str, pin: str) -> dict[str, Any] | None:
     """MOCK: verify phone + PIN against the customer data source."""
+    time.sleep(0.2)
     record = CUSTOMERS.get(_normalize_phone(phone_number))
     if record and record["pin"] == pin:
         return record
     return None
+
+
+def suspend_line(phone_number: str) -> bool:
+    """MOCK: call the account-management API to suspend the line.
+    Randomly fails ~10% of the time to exercise the failure/fallback path.
+    """
+    time.sleep(0.3)
+    return random.random() > 0.10
+
+
+def log_interaction(record: dict[str, Any]) -> None:
+    """MOCK: write a post-call summary row to the interactions table."""
+    logger.info("[MOCK INTERACTIONS LOG] %s", record)
 
 def send_otp(target_phone: str) -> None:
     """MOCK: send a one-time code via SMS to the secondary verified number."""
@@ -71,13 +104,7 @@ def verify_otp(target_phone: str, submitted_code: str) -> bool:
     expected = _OTP_STORE.get(target_phone)
     return expected is not None and submitted_code.strip() == expected
 
-def suspend_line(phone_number: str) -> bool:
-    """MOCK: call the account-management API to suspend the line."""
-    return True
 
-def suspend_line(phone_number: str) -> bool:
-    """MOCK: call the account-management API to suspend the line."""
-    return True
 
 def check_replacement_eligibility(phone_number: str) -> dict[str, Any]:
     """MOCK: look up device replacement eligibility from an external service."""
@@ -131,6 +158,11 @@ agent = Agent(
         "through replacement options."
     ),
 )
+@agent.on_call_received
+def on_call_received(call_info: guava.CallInfo) -> guava.IncomingCallAction:
+    return guava.AcceptCall()
+
+
 document_qa = DocumentQA(documents=SUPPORT_KB) 
 @agent.on_question
 def on_question(call: guava.Call, question: str) -> str:
@@ -138,14 +170,15 @@ def on_question(call: guava.Call, question: str) -> str:
     return document_qa.ask(question)
 @agent.on_call_start
 def on_call_start(call: guava.Call) -> None:
-    state_for(call)
+    state_for(call)  # initialize state
     call.set_task(
         "authenticate",
         objective=(
             "You are helping a caller who may need to report a lost or stolen "
             "device. Before doing anything else, confirm that's why they're "
             "calling, then verify their identity by collecting the phone number "
-            "on the account and their account PIN."
+            "on the account and their account PIN. Be calm and reassuring — "
+            "this is often a stressful moment for the caller."
         ),
         checklist=[
             guava.Field(key="phone_number", description="The phone number associated with the account"),
@@ -164,6 +197,8 @@ def on_authenticate_done(call: guava.Call) -> None:
 
     if record is None:
         if st.auth_attempts >= MAX_AUTH_RETRIES:
+            st.escalated = True
+            st.escalation_reason = "authentication failed"
             call.hangup(
                 "Apologize that you're unable to verify the account after "
                 "multiple attempts for security reasons. Direct the caller to "
@@ -288,60 +323,125 @@ def on_lost_or_stolen_done(call: guava.Call) -> None:
         return
 
     device_status = call.get_field("device_status")
-    suspend_line(st.phone_number)
+    suspended_ok = suspend_line(st.phone_number)
+
+    if not suspended_ok:
+        st.escalated = True
+        st.escalation_reason = "line suspension API failure"
+        call.transfer(
+            destination=os.environ.get("SUPPORT_TRANSFER_NUMBER", "+18005550100"),
+            instructions=(
+                "Apologize that there was a technical issue suspending the "
+                "line, reassure the caller their request is being handled, "
+                "and let them know you're connecting them with a support "
+                "representative who can complete this manually."
+            ),
+        )
+        return
+
     st.actions_taken.append(f"suspended line for device_status={device_status}")
+    call.send_instruction("The line has been temporarily suspended. Confirm this with the caller in plain language.")
 
-    # Check database to see if this specific customer is eligible for promotions
+    if device_status == "stolen":
+        imei = st.customer["device"]["imei"]
+        call.add_info(
+            "stolen_device_guidance",
+            {
+                "advice": (
+                    "Because the device was stolen rather than lost, advise the "
+                    "caller to file a report with their local law enforcement "
+                    "agency, and let them know their device IMEI may be "
+                    f"requested during that process: {imei}."
+                )
+            },
+        )
+
+    _offer_replacement_guidance(call)
+
+
+
+def _offer_replacement_guidance(call: guava.Call) -> None:
+    st = state_for(call)
+    assert st.phone_number is not None
+
     eligibility = check_replacement_eligibility(st.phone_number)
-    has_discount = eligibility["eligible_for_discounted_replacement"]
-
-    call.send_instruction(
-        f"The line has been temporarily suspended. Inform the customer of this.\n\n"
-        f"Next, share their device replacement eligibility:\n"
-        f"- Eligible for low-cost insurance replacement: {'YES (device protection active)' if has_discount else 'NO'}\n"
-        f"- Eligible for promotional upgrade: {'YES' if eligibility['eligible_for_upgrade'] else 'NO'}\n\n"
-        f"Now, let's find out how they want to handle getting their replacement."
-    )
+    call.add_info("replacement_eligibility", eligibility)
 
     call.set_task(
-        "device_replacement",
+        "replacement_guidance",
         objective=(
-            "Discuss replacement device fulfillment options. Find out if they "
-            "prefer to pick up a replacement in a local Metro retail store, "
-            "or if they want one shipped directly to their home address."
+            "Now that the account is secure, walk the caller through their "
+            "device replacement options based on the eligibility information "
+            "you have, and answer any follow-up questions. When they're ready "
+            "to end the call, close warmly."
         ),
         checklist=[
-            guava.Field(
-                key="replacement_preference",
-                description="How does the customer want to receive their new device?",
-                field_type="multiple_choice",
-                choices=["store", "shipping"],
-            ),
+            "Explain the caller's replacement options based on their "
+            "eligibility, and mention they can also visit a Metro by "
+            "T-Mobile store or speak with a support specialist.",
+            "Ask if there's anything else you can help with before ending the call.",
         ],
     )
 
-@agent.on_task_complete("device_replacement")
-def on_device_replacement_done(call: guava.Call) -> None:
+
+@agent.on_task_complete("replacement_guidance")
+def on_replacement_guidance_done(call: guava.Call) -> None:
+    call.hangup("Thank the caller, wish them well, and end the call.")
+
+
+# ---------------------------------------------------------------------------
+# 4. Escalation & Safety Behavior
+# ---------------------------------------------------------------------------
+
+REP_REQUEST_KEY = "representative"
+
+
+@agent.on_action_request
+def on_action_request(call: guava.Call, request: str) -> SuggestedAction | None:
+    lowered = request.lower()
+    if any(kw in lowered for kw in ("representative", "agent", "human", "speak to someone", "manager")):
+        return SuggestedAction(key=REP_REQUEST_KEY)
+    return None
+
+
+@agent.on_action(REP_REQUEST_KEY)
+def on_representative_requested(call: guava.Call) -> None:
     st = state_for(call)
-    preference = call.get_field("replacement_preference")
-    st.actions_taken.append(f"selected replacement preference: {preference}")
+    st.escalated = True
+    st.escalation_reason = "caller requested a representative"
+    call.transfer(
+        destination=os.environ.get("SUPPORT_TRANSFER_NUMBER", "+18005550100"),
+        instructions=(
+            "Acknowledge the caller's request, briefly summarize what's "
+            "happened on the call so far, and let them know you're "
+            "connecting them with a representative now."
+        ),
+    )
 
-    if preference == "store":
-        call.send_instruction(
-            "Inform the customer they can head over to any Metro by T-Mobile store. "
-            "Remind them that they MUST bring a valid government-issued photo ID "
-            "in order to complete a physical swap or activate a new SIM card."
-        )
-    else:
-        call.send_instruction(
-            "Advise the customer that an order confirmation email and tracking link "
-            "will be dispatched shortly. Remind them that standard shipping takes "
-            "between 3 to 5 business days."
-        )
 
-    call.hangup("Warmly thank the customer for using Metro support, ask if there is "
-                "anything else they need, and end the call beautifully.")
+@agent.on_session_end
+def on_session_end(call: guava.Call, event: guava.events.BotSessionEnded) -> None:
+    st = state_for(call)
+    record = {
+        "call_id": call.id,
+        "customer_name": st.customer["name"] if st.customer else None,
+        "reason_for_call": st.call_reason,
+        "actions_performed": st.actions_taken,
+        "escalated": st.escalated,
+        "escalation_reason": st.escalation_reason,
+        "termination_reason": event.termination_reason,
+        "sentiment": "neutral",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    log_interaction(record)
+    # Writing to our configured google sheet database:
+    try:
+        sheet.append_row(list(record.values()))
+    except Exception as e:
+        logger.error("Failed to sync log to sheets: %s", e)
 
+
+        
 if __name__ == "__main__":
     from guava import logging_utils
     logging_utils.configure_logging()
