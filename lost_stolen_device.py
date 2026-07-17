@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 from dataclasses import dataclass, field
-# from typing import Any
+from typing import Any
 import logging
 import random
 from datetime import datetime, timezone
@@ -11,9 +11,12 @@ from datetime import datetime, timezone
 import guava
 from guava import Agent
 from guava import SuggestedAction
+from guava import Client
 from guava.helpers.rag import DocumentQA
+client = Client()
 
 import gspread
+# from transformers import Any
 
 gc = gspread.service_account(
     "/Users/pratikshapadmanabhan/Downloads/metro-lost-device-agent-502521-b5bf963123d1.json"
@@ -95,11 +98,25 @@ def log_interaction(record: dict[str, Any]) -> None:
         record["sentiment"],
     ])
 
+# def send_otp(target_phone: str) -> None:
+#     """MOCK: send a one-time code via SMS to the secondary verified number."""
+#     code = f"{random.randint(0, 999999):06d}"
+#     _OTP_STORE[target_phone] = code
+#     logger.info("[MOCK SMS] OTP %s sent to %s", code, target_phone)
+
 def send_otp(target_phone: str) -> None:
-    """MOCK: send a one-time code via SMS to the secondary verified number."""
     code = f"{random.randint(0, 999999):06d}"
+
+    target_phone = _normalize_phone(target_phone)
+
     _OTP_STORE[target_phone] = code
-    logger.info("[MOCK SMS] OTP %s sent to %s", code, target_phone)
+
+    client.send_sms(
+        from_number="+14849986369",
+        to_number=target_phone,
+        message=f"Your verification code is {code}"
+    
+    )   
 
 def verify_otp(target_phone: str, submitted_code: str) -> bool:
     expected = _OTP_STORE.get(target_phone)
