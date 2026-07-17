@@ -3,14 +3,14 @@ from __future__ import annotations
 import argparse
 import os
 from dataclasses import dataclass, field
-import time
-from typing import Any
+# from typing import Any
 import logging
 import random
 from datetime import datetime, timezone
 
 import guava
 from guava import Agent
+from guava import SuggestedAction
 from guava.helpers.rag import DocumentQA
 
 import gspread
@@ -18,30 +18,13 @@ import gspread
 gc = gspread.service_account(
     "/Users/pratikshapadmanabhan/Downloads/metro-lost-device-agent-502521-b5bf963123d1.json"
 )
-sheet = gc.open("guavaCustomerSupport").sheet1
 
 logger = logging.getLogger("metro.lost_stolen_device")
 
+spreadsheet = gc.open("guavaCustomerSupport")
 
-
-CUSTOMERS: dict[str, dict[str, Any]] = {
-    "+15551234567": {
-        "name": "Jordan Alvarez",
-        "pin": "4821",
-        "account_status": "active",
-        "account_type": "multi_line",
-        "otp_target_phone": "+15559876543",
-        "device": {"model": "Galaxy A15", "imei": "358212345678901"},
-    },
-    "+15552223333": {
-        "name": "Priya Natarajan",
-        "pin": "0099",
-        "account_status": "active",
-        "account_type": "single_line",
-        "otp_target_phone": None,
-        "device": {"model": "iPhone 13", "imei": "358299887766554"},
-    },
-}
+customers_sheet = spreadsheet.worksheet("Customers")
+logs_sheet = spreadsheet.worksheet("InteractionLog")
 
 SUPPORT_KB = """
 Device Replacement Options
@@ -73,26 +56,44 @@ store or through account self-service.
 """
 _OTP_STORE: dict[str, str] = {}
 
-def lookup_customer(phone_number: str, pin: str) -> dict[str, Any] | None:
-    """MOCK: verify phone + PIN against the customer data source."""
-    time.sleep(0.2)
-    record = CUSTOMERS.get(_normalize_phone(phone_number))
-    if record and record["pin"] == pin:
-        return record
+def lookup_customer(phone_number: str, pin: str):
+    phone_number = _normalize_phone(phone_number).replace("+", "")
+
+    records = customers_sheet.get_all_records()
+
+    for row in records:
+        if str(row["Phone"]) == phone_number and str(row["PIN"]).strip() == pin.strip().lstrip("0") :
+            return {
+                "name": row["Name"],
+                "pin": str(row["PIN"]),
+                "account_status": row["Status"],
+                "account_type": row["Account Type"],
+                "otp_target_phone": str(row["OTP Phone"]).strip() or None,
+                "device": {
+                    "model": row["Device"],
+                    "imei": row["IMEI"],
+                },
+            }
+
     return None
 
 
 def suspend_line(phone_number: str) -> bool:
-    """MOCK: call the account-management API to suspend the line.
-    Randomly fails ~10% of the time to exercise the failure/fallback path.
-    """
-    time.sleep(0.3)
-    return random.random() > 0.10
+    """MOCK: call the account-management API to suspend the line."""
+    return True
 
 
 def log_interaction(record: dict[str, Any]) -> None:
-    """MOCK: write a post-call summary row to the interactions table."""
-    logger.info("[MOCK INTERACTIONS LOG] %s", record)
+    """Write a post-call summary row to the InteractionLog sheet."""
+    logs_sheet.append_row([
+        record["timestamp"],
+        record["customer_name"],
+        record["phone"],
+        record["actions_performed"],
+        record["escalated"],
+        record["escalation_reason"],
+        record["sentiment"],
+    ])
 
 def send_otp(target_phone: str) -> None:
     """MOCK: send a one-time code via SMS to the secondary verified number."""
@@ -106,14 +107,11 @@ def verify_otp(target_phone: str, submitted_code: str) -> bool:
 
 
 
-def check_replacement_eligibility(phone_number: str) -> dict[str, Any]:
-    """MOCK: look up device replacement eligibility from an external service."""
-    record = CUSTOMERS.get(_normalize_phone(phone_number))
-    has_protection_plan = record is not None and record["account_type"] == "multi_line"
+def check_replacement_eligibility(customer: dict[str, Any]) -> dict[str, Any]:
+    """Return simplified replacement guidance based on the customer's plan."""
     return {
-        "eligible_for_discounted_replacement": has_protection_plan,
+        "eligible_for_discounted_replacement": customer["account_type"] == "multi_line",
         "eligible_for_upgrade": True,
-        "nearest_store_hint": "use the store locator at metrobyt-mobile.com/stores",
     }
 
 def _normalize_phone(raw: str) -> str:
@@ -364,7 +362,7 @@ def _offer_replacement_guidance(call: guava.Call) -> None:
     st = state_for(call)
     assert st.phone_number is not None
 
-    eligibility = check_replacement_eligibility(st.phone_number)
+    eligibility = check_replacement_eligibility(st.customer)
     call.add_info("replacement_eligibility", eligibility)
 
     call.set_task(
@@ -423,25 +421,21 @@ def on_representative_requested(call: guava.Call) -> None:
 def on_session_end(call: guava.Call, event: guava.events.BotSessionEnded) -> None:
     st = state_for(call)
     record = {
-        "call_id": call.id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "customer_name": st.customer["name"] if st.customer else None,
-        "reason_for_call": st.call_reason,
-        "actions_performed": st.actions_taken,
+        "phone": st.phone_number,
+        "actions_performed": ", ".join(st.actions_taken),
         "escalated": st.escalated,
         "escalation_reason": st.escalation_reason,
-        "termination_reason": event.termination_reason,
         "sentiment": "neutral",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
-    log_interaction(record)
-    # Writing to our configured google sheet database:
     try:
-        sheet.append_row(list(record.values()))
+        log_interaction(record)
     except Exception as e:
         logger.error("Failed to sync log to sheets: %s", e)
 
 
-        
+
 if __name__ == "__main__":
     from guava import logging_utils
     logging_utils.configure_logging()
