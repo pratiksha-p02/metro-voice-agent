@@ -81,10 +81,68 @@ def lookup_customer(phone_number: str, pin: str):
     return None
 
 
+# def suspend_line(phone_number: str) -> bool:
+#     """MOCK: call the account-management API to suspend the line."""
+#     return True
 def suspend_line(phone_number: str) -> bool:
-    """MOCK: call the account-management API to suspend the line."""
-    return True
+    """
+    Suspend a customer's line by updating the Google Sheets backend.
+    Returns True only if the customer's status was successfully updated.
+    """
 
+    try:
+        phone_number = _normalize_phone(phone_number).replace("+", "")
+
+        records = customers_sheet.get_all_records()
+
+        headers = customers_sheet.row_values(1)
+
+        phone_col = headers.index("Phone") + 1
+        status_col = headers.index("Status") + 1
+
+        for row_index, row in enumerate(records, start=2):
+
+            if str(row["Phone"]).strip() == phone_number:
+
+                current_status = str(row["Status"]).strip().lower()
+
+                # Already suspended
+                if current_status == "suspended":
+                    logger.info(
+                        "Line %s is already suspended",
+                        phone_number
+                    )
+                    return True
+
+                # Update status column
+                customers_sheet.update_cell(
+                    row_index,
+                    status_col,
+                    "suspended"
+                )
+
+                logger.info(
+                    "Successfully suspended line %s",
+                    phone_number
+                )
+
+                return True
+
+        logger.warning(
+            "Could not find customer with phone %s",
+            phone_number
+        )
+
+        return False
+
+    except Exception as e:
+        logger.error(
+            "Failed to suspend line %s: %s",
+            phone_number,
+            e
+        )
+
+        return False
 
 def log_interaction(record: dict[str, Any]) -> None:
     """Write a post-call summary row to the InteractionLog sheet."""
@@ -280,8 +338,9 @@ def on_otp_done(call: guava.Call) -> None:
             "Apologize that the verification code could not be confirmed after "
             "multiple attempts. For security reasons, explain that you can't "
             "make account changes right now, and direct the caller to visit a "
-            "Metro by T-Mobile store with a valid government-issued photo ID "
-            "or speak with a support representative."
+            "Metro by T-Mobile store with a valid government-issued photo ID"
+            "or offer to connect them with a customer support "
+            "representative. Do not disclose or guess at any account details."
         )
         return
 
