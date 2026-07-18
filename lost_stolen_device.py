@@ -7,6 +7,8 @@ from typing import Any
 import logging
 import random
 from datetime import datetime, timezone
+from dotenv import load_dotenv
+
 
 import guava
 from guava import Agent
@@ -14,11 +16,12 @@ from guava import SuggestedAction
 from guava import Client
 from guava.helpers.rag import DocumentQA
 client = Client()
+load_dotenv()
 
 import gspread
 
 gc = gspread.service_account(
-    "/Users/pratikshapadmanabhan/Downloads/metro-lost-device-agent-502521-b5bf963123d1.json"
+    filename=os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
 )
 
 logger = logging.getLogger("metro.lost_stolen_device")
@@ -81,9 +84,6 @@ def lookup_customer(phone_number: str, pin: str):
     return None
 
 
-# def suspend_line(phone_number: str) -> bool:
-#     """MOCK: call the account-management API to suspend the line."""
-#     return True
 def suspend_line(phone_number: str) -> bool:
     """
     Suspend a customer's line by updating the Google Sheets backend.
@@ -195,9 +195,7 @@ def _normalize_phone(raw: str) -> str:
         digits = "1" + digits
     return "+" + digits
 
-# ---------------------------------------------------------------------------
-# Per-call state management
-# ---------------------------------------------------------------------------
+
 MAX_AUTH_RETRIES = 2
 MAX_OTP_RETRIES = 2
 
@@ -246,7 +244,7 @@ def on_question(call: guava.Call, question: str) -> str:
 
 @agent.on_call_start
 def on_call_start(call: guava.Call) -> None:
-    state_for(call)  # initialize state
+    state_for(call)  
     call.set_task(
         "authenticate",
         objective=(
@@ -330,7 +328,7 @@ def on_otp_done(call: guava.Call) -> None:
         _begin_device_resolution(call, record["name"])
         return
 
-    # Check if we hit the limit
+   
     if st.otp_attempts >= MAX_OTP_RETRIES:
         st.escalated = True
         st.escalation_reason = "OTP verification failed"
@@ -338,13 +336,12 @@ def on_otp_done(call: guava.Call) -> None:
             "Apologize that the verification code could not be confirmed after "
             "multiple attempts. For security reasons, explain that you can't "
             "make account changes right now, and direct the caller to visit a "
-            "Metro by T-Mobile store with a valid government-issued photo ID"
+            "Metro by T-Mobile store with a valid government-issued photo ID "
             "or offer to connect them with a customer support "
             "representative. Do not disclose or guess at any account details."
         )
         return
 
-    # Fallback retry warning
     call.send_instruction(
         "That code didn't match. Apologize and ask the caller to read the "
         "verification code back one more time."
