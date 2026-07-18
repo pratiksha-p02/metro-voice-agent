@@ -16,7 +16,6 @@ from guava.helpers.rag import DocumentQA
 client = Client()
 
 import gspread
-# from transformers import Any
 
 gc = gspread.service_account(
     "/Users/pratikshapadmanabhan/Downloads/metro-lost-device-agent-502521-b5bf963123d1.json"
@@ -57,6 +56,7 @@ A suspended line can be reactivated on a replacement device once the customer
 either inserts their existing SIM card or has an eSIM re-provisioned in
 store or through account self-service.
 """
+
 _OTP_STORE: dict[str, str] = {}
 
 def lookup_customer(phone_number: str, pin: str):
@@ -98,25 +98,25 @@ def log_interaction(record: dict[str, Any]) -> None:
         record["sentiment"],
     ])
 
-# def send_otp(target_phone: str) -> None:
-#     """MOCK: send a one-time code via SMS to the secondary verified number."""
-#     code = f"{random.randint(0, 999999):06d}"
-#     _OTP_STORE[target_phone] = code
-#     logger.info("[MOCK SMS] OTP %s sent to %s", code, target_phone)
-
 def send_otp(target_phone: str) -> None:
+    """MOCK: send a one-time code via SMS to the secondary verified number."""
     code = f"{random.randint(0, 999999):06d}"
-
-    target_phone = _normalize_phone(target_phone)
-
     _OTP_STORE[target_phone] = code
+    logger.info("[MOCK SMS] OTP %s sent to %s", code, target_phone)
 
-    client.send_sms(
-        from_number="+14849986369",
-        to_number=target_phone,
-        message=f"Your verification code is {code}"
+# def send_otp(target_phone: str) -> None:
+#     code = f"{random.randint(0, 999999):06d}"
+
+#     target_phone = _normalize_phone(target_phone)
+
+#     _OTP_STORE[target_phone] = code
+
+#     client.send_sms(
+#         from_number="+14849986369",
+#         to_number=target_phone,
+#         message=f"Your verification code is {code}"
     
-    )   
+#     )   
 
 def verify_otp(target_phone: str, submitted_code: str) -> bool:
     expected = _OTP_STORE.get(target_phone)
@@ -179,10 +179,13 @@ def on_call_received(call_info: guava.CallInfo) -> guava.IncomingCallAction:
 
 
 document_qa = DocumentQA(documents=SUPPORT_KB) 
+
 @agent.on_question
 def on_question(call: guava.Call, question: str) -> str:
     """Retrieve answers dynamically from our local KB when asked an out-of-flow question."""
     return document_qa.ask(question)
+
+
 @agent.on_call_start
 def on_call_start(call: guava.Call) -> None:
     state_for(call)  # initialize state
@@ -192,7 +195,7 @@ def on_call_start(call: guava.Call) -> None:
             "You are helping a caller who may need to report a lost or stolen "
             "device. Before doing anything else, confirm that's why they're "
             "calling, then verify their identity by collecting the phone number "
-            "on the account and their account PIN. Be calm and reassuring — "
+            "on the account and their account PIN. Be calm, understanding, and reassuring as "
             "this is often a stressful moment for the caller."
         ),
         checklist=[
