@@ -219,15 +219,12 @@ def state_for(call: guava.Call) -> CallState:
 
 
 
-
-
-
 agent = Agent(
     name="Bianca",
     organization="Metro by T-Mobile",
     purpose=(
         "Help callers secure their account after a lost or stolen device, "
-        "verify their identity, suspend the affected line, and guide them "
+        "verify their identity, suspend the affected line and guide them "
         "through replacement options."
     ),
 )
