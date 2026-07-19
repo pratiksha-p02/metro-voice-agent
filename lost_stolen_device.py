@@ -26,6 +26,7 @@ gc = gspread.service_account(
 
 logger = logging.getLogger("metro.lost_stolen_device")
 
+# The Sheets workbook acts as a lightweight backend for this sandboxed demo instead of a real carrier API.
 spreadsheet = gc.open("guavaCustomerSupport")
 
 customers_sheet = spreadsheet.worksheet("Customers")
@@ -86,7 +87,7 @@ def lookup_customer(phone_number: str, pin: str):
 
 def suspend_line(phone_number: str) -> bool:
     """
-    Suspend a customer's line by updating the Google Sheets backend.
+    Suspend the line only after verification; this is the security-sensitive backend action that protects the account.
     Returns True only if the customer's status was successfully updated.
     """
 
@@ -157,7 +158,7 @@ def log_interaction(record: dict[str, Any]) -> None:
     ])
 
 def send_otp(target_phone: str) -> None:
-    """MOCK: send a one-time code via SMS to the secondary verified number."""
+    """Mock SMS delivery for the sandboxed demo; real OTP transport is intentionally omitted here."""
     code = f"{random.randint(0, 999999):06d}"
     _OTP_STORE[target_phone] = code
     logger.info("[MOCK SMS] OTP %s sent to %s", code, target_phone)
@@ -199,6 +200,7 @@ def _normalize_phone(raw: str) -> str:
 MAX_AUTH_RETRIES = 2
 MAX_OTP_RETRIES = 2
 
+# Keep call state in a deterministic dictionary outside the LLM so the conversation can advance safely across tasks.
 @dataclass
 class CallState:
     authenticated: bool = False
@@ -353,6 +355,7 @@ def on_otp_done(call: guava.Call) -> None:
     )
 
 
+# Transition from verification to the device-resolution stage of the conversation.
 def _begin_device_resolution(call: guava.Call, customer_name: str) -> None:
     st = state_for(call)
     st.authenticated = True
@@ -434,6 +437,7 @@ def on_lost_or_stolen_done(call: guava.Call) -> None:
 
 
 
+# Transition to replacement guidance once the account is secured.
 def _offer_replacement_guidance(call: guava.Call) -> None:
     st = state_for(call)
     assert st.phone_number is not None
@@ -478,6 +482,7 @@ def on_action_request(call: guava.Call, request: str) -> SuggestedAction | None:
     return None
 
 
+# Human handoff is treated as a safe escalation path when the caller asks for an agent.
 @agent.on_action(REP_REQUEST_KEY)
 def on_representative_requested(call: guava.Call) -> None:
     st = state_for(call)
@@ -512,6 +517,7 @@ def on_session_end(call: guava.Call, event: guava.events.BotSessionEnded) -> Non
 
 
 
+# Entry point: start the agent in the selected runtime mode.
 if __name__ == "__main__":
     from guava import logging_utils
     logging_utils.configure_logging()
