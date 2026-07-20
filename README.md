@@ -74,7 +74,7 @@ pip install -r requirements.txt
 GUAVA_API_KEY=...
 GOOGLE_APPLICATION_CREDENTIALS=path/to/service-account.json
 GUAVA_AGENT_NUMBER=...
-SUPPORT_TRANSFER_NUMBER=...
+
 ```
 
 5. Share the Google Sheet with the Google service account email.
@@ -122,7 +122,7 @@ Given another development iteration, I would prioritize:
 
 I used ChatGPT, Claude and Gemini primarily for brainstorming, SDK understanding, implementation guidance and code review. During planning, I used it to evaluate different customer support scenarios, refine the conversational flow, and think through authentication and escalation strategies. During implementation, I used it to better understand the Guava SDK, generate initial code drafts, and review portions of the codebase for readability and maintainability.
 
-I did not treat AI-generated code as final. For example, early drafts relied on hardcoded mock dictionaries, but I replaced those with a Google Sheets integration to better reflect a realistic external system. I also simplified several generated designs that introduced more abstraction than I felt was appropriate for an 8–10 hour project, keeping the architecture focused and maintainable.
+I did not treat AI-generated code as final. For example, early drafts relied on hardcoded mock dictionaries, but I replaced those with a Google Sheets integration to better reflect a realistic external system. I also simplified several generated designs that introduced more abstraction than I felt was appropriate for an 8–10 hour project, keeping the architecture focused and maintainable. One issue I caught was around PIN verification. An earlier implementation compared PINs directly as strings, which caused problems with values containing leading zeros when read from Google Sheets. I adjusted the comparison logic to normalize the values before verification so authentication behaved consistently.
 
 Rather than generating the entire project end-to-end, I implemented and tested the application incrementally. I preferred understanding each SDK callback and backend interaction before incorporating it, modifying generated code where necessary to fit the conversational flow and implementation choices I wanted. My goal was to use AI to accelerate development while still making the architectural and implementation decisions myself.
 
