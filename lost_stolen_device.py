@@ -52,7 +52,7 @@ government-issued photo ID to regain access to their account.
 Reporting a Stolen Device
 Customers who believe their device was stolen, rather than misplaced, should
 file a report with their local law enforcement agency. They should keep note
-of their device's IMEI number, which the assistant can help confirm, in case
+of their device's I-M-E-I number, which the assistant can help confirm, in case
 it's requested during the investigation.
 
 SIM and eSIM
@@ -389,10 +389,23 @@ def on_lost_or_stolen_done(call: guava.Call) -> None:
     assert st.customer is not None and st.phone_number is not None
 
     if call.get_field("suspend_confirmed") == "no":
-        call.hangup(
-            "Acknowledge the caller does not want to suspend the line right "
-            "now, let them know they can call back anytime to do so, and end "
-            "the call politely."
+        call.send_instruction(
+        "The caller does not want to suspend the line right now. "
+        "Acknowledge their choice, let them know they can request suspension "
+        "later, and ask if there is anything else you can help with."
+        )
+
+        call.set_task(
+        "general_support",
+        objective=(
+            "Help the caller with any additional questions they have. "
+            "Do not attempt to suspend the line unless they explicitly request it."
+            ),
+        checklist=[
+            "Ask if there is anything else you can help with.",
+            "Answer any questions using available support information.",
+            "End the call politely when the caller is finished."
+            ],
         )
         return
 
@@ -424,7 +437,7 @@ def on_lost_or_stolen_done(call: guava.Call) -> None:
                 "advice": (
                     "Because the device was stolen rather than lost, advise the "
                     "caller to file a report with their local law enforcement "
-                    "agency, and let them know their device IMEI may be "
+                    "agency, and let them know their device I-M-E-I may be "
                     f"requested during that process: {imei}."
                 )
             },
@@ -432,7 +445,11 @@ def on_lost_or_stolen_done(call: guava.Call) -> None:
 
     _offer_replacement_guidance(call)
 
-
+@agent.on_task_complete("general_support")
+def on_general_support_done(call: guava.Call) -> None:
+    call.hangup(
+        "Thank the caller and end the call politely."
+    )
 
 # Transition to replacement guidance once the account is secured.
 def _offer_replacement_guidance(call: guava.Call) -> None:
